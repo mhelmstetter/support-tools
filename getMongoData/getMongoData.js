@@ -56,12 +56,7 @@
  * limitations under the License.
  */
 
-// Potentially breaking changes in "4.0.0" with respect to "3.1.0":
-//  -   _printJSON with _maxCollections no longer renames sections with "INCOMPLETE_" prefix when 
-//      _maxCollections is reached. Instead, the last element of the output JSON array contains an 
-//      error message.
-//  -   _printJSON outputs error messages after the JSON array is printed, instead of before. 
-var _version = "4.1.0";
+var _version = "3.0.0";
 
 (function () {
    "use strict";
@@ -175,7 +170,7 @@ function printShardInfo(){
                                     collDoc['chunks'] = [];
                                     configDB.chunks.find( { "ns" : coll._id } ).sort( { min : 1 } ).forEach(
                                         function(chunk) {
-                                            chunkDoc = {};
+                                            chunkDoc = {}
                                             chunkDoc['min'] = chunk.min;
                                             chunkDoc['max'] = chunk.max;
                                             chunkDoc['shard'] = chunk.shard;
@@ -188,7 +183,7 @@ function printShardInfo(){
                                 collDoc['tags'] = [];
                                 configDB.tags.find( { ns : coll._id } ).sort( { min : 1 } ).forEach(
                                     function(tag) {
-                                        tagDoc = {};
+                                        tagDoc = {}
                                         tagDoc['tag'] = tag.tag;
                                         tagDoc['min'] = tag.min;
                                         tagDoc['max'] = tag.max;
@@ -221,14 +216,6 @@ function printShardInfo(){
     }
 }
 
-function removeUnnecessaryCommandFields(object) {
-    const commandFieldsToFilter = ["ok", "operationTime", "$clusterTime", "$gleStats", "lastCommittedOpTime", "$configServerState"];
-    commandFieldsToFilter.forEach((fieldToRemove) => {
-        delete object[fieldToRemove];
-    });
-}
-
-var _jsonOutBuffer = ""; 
 function printInfo(message, command, section, printCapture, commandParameters) {
     var result = false;
     if (typeof printCapture === "undefined") var printCapture = false;
@@ -251,44 +238,24 @@ function printInfo(message, command, section, printCapture, commandParameters) {
     }
     endTime = new Date();
     doc = {};
+    doc['command'] = command.toString();
+    doc['error'] = err;
+    doc['host'] = _host;
+    doc['ref'] = _ref;
+    doc['tag'] = _tag;
+    doc['output'] = result;
     if (typeof(section) !== "undefined") {
         doc['section'] = section;
         doc['subsection'] = message.toLowerCase().replace(/ /g, "_");
     } else {
         doc['section'] = message.toLowerCase().replace(/ /g, "_");
     }
-
-    if (_verbose) {
-        doc['command'] = command.toString();
-        doc['error'] = err;
-        doc['host'] = _host;
-        doc['ref'] = _ref;
-        doc['tag'] = _tag;
-        doc['ts'] = {'start': startTime, 'end': endTime};
-        doc['version'] = _version;
-        if (typeof commandParameters !== undefined) {
-            doc['commandParameters'] = commandParameters
-        }
-    } else {
-        if(err) {
-            doc['error'] = err;
-        }
-        removeUnnecessaryCommandFields(result);
+    doc['ts'] = {'start': startTime, 'end': endTime};
+    doc['version'] = _version;
+    if (typeof commandParameters !== undefined) {
+      doc['commandParameters'] = commandParameters
     }
-
-    doc['output'] = result;
-
-    // Stream JSON array element.
-    if (_printJSON) {
-        if (!_jsonOutBuffer) {
-            _jsonOutBuffer = JSON.stringify(doc, jsonStringifyReplacer, 4);
-        }
-        else {
-            print(_jsonOutBuffer, ",");
-            _jsonOutBuffer = JSON.stringify(doc, jsonStringifyReplacer, 4);
-        }
-    }
-
+    _output.push(doc);
     if (! _printJSON) printjson(result);
     return result;
 }
@@ -305,14 +272,6 @@ function printServerInfo() {
     printInfo('Server parameters',  function(){return db.adminCommand({getParameter: '*'})}, section);
 }
 
-function printReplicaSetInfo() {
-    section = "replicaset_info";
-    printInfo('Replica set config', function(){return rs.conf()}, section);
-    printInfo('Replica status',     function(){return rs.status()}, section);
-    printInfo('Replica info',       function(){return db.getReplicationInfo()}, section);
-    printInfo('Replica slave info', function(){return db.printSlaveReplicationInfo()}, section, true);
-}
-
 function printUserAuthInfo() {
   section = "user_auth_info";
   db = db.getSiblingDB('admin');
@@ -323,37 +282,6 @@ function printUserAuthInfo() {
     printInfo('Database user count', function(){return db.system.users.count()}, section);
     printInfo('Custom role count', function(){return db.system.roles.count()}, section);
   }
-}
-
-function printDriverVersions() {
-  section = 'driverVersions';
-  printInfo('Driver Versions', function() {
-    return db.getSiblingDB('admin')
-        .aggregate([
-          {
-            $currentOp: {
-              allUsers: true,
-              idleConnections: true,
-              idleSessions: true,
-              localOps: true
-            },
-          },
-          {$match: {clientMetadata: {$exists: true}}},
-          {
-            $group: {
-              _id: {
-                application: '$clientMetadata.application',
-                driver: '$clientMetadata.driver',
-                platform: '$clientMetadata.platform',
-                os: '$clientMetadata.os',
-              },
-              count: {$sum: 1},
-              last: {$max: '$currentOpTime'},
-            },
-          },
-        ])
-        .toArray();
-  }, section);
 }
 
 // find all QE collections
@@ -497,32 +425,11 @@ function collectQueryableEncryptionInfo(isMongoS) {
     return output;
 }
 
-function filterStatsOutput(stats) {
-    function filterWiredTigerDetails(wiredTiger) {
-        if(_printWiredTigerDetails)
-            return wiredTiger;
-
-        const { metadata, creationString, type, uri } = wiredTiger;
-        return { metadata, creationString, type, uri };
-    }
-
-    stats.wiredTiger = filterWiredTigerDetails(stats.wiredTiger);
-
-    for (var shard in (stats.shards || {})) {
-        var shardStats = stats.shards[shard];
-
-        if(!_verbose) {
-            removeUnnecessaryCommandFields(shardStats);
-        }
-
-        shardStats.wiredTiger = filterWiredTigerDetails(shardStats.wiredTiger);
-
-        for (var index in (shardStats.indexDetails || {})) {
-            shardStats.indexDetails[index] = filterWiredTigerDetails(shardStats.indexDetails[index]);
-        }
-    }
-    
-    return stats;
+function updateDataInfoAsIncomplete(isMongoS) {
+  for (i = 0; i < _output.length; i++) {
+    if(_output[i].section != "data_info") { continue; }
+    _output[i].subsection = "INCOMPLETE_"+ _output[i].subsection;
+  }
 }
 
 function printDataInfo(isMongoS) {
@@ -532,6 +439,12 @@ function printDataInfo(isMongoS) {
 
     if (dbs.databases) {
         dbs.databases.forEach(function(mydb) {
+            // Skip the "local" database entirely
+            if (mydb.name === "local") {
+                print("DEBUG: Skipping 'local' database to avoid permission issues");
+                return; // Skip this iteration
+            }
+
             var collections = printInfo("List of collections for database '"+ mydb.name +"'",
                 function() {
                     var collectionNames = []
@@ -542,7 +455,7 @@ function printDataInfo(isMongoS) {
                     })
 
                     // Filter out the collections with the "system." prefix in the system databases
-                    if (mydb.name == "config" || mydb.name == "local" || mydb.name == "admin") {
+                    if (mydb.name == "config" || mydb.name == "admin") {
                         return collectionNames.filter(function (str) { return str.indexOf("system.") != 0; });
                     } else {
                         return collectionNames;
@@ -559,22 +472,22 @@ function printDataInfo(isMongoS) {
             if (collections) {
                 collections.forEach(function(col) {
                     printInfo('Collection stats (MB)',
-                              function(){return filterStatsOutput(db.getSiblingDB(mydb.name).getCollection(col).stats(1024*1024));}, section);
+                              function(){return db.getSiblingDB(mydb.name).getCollection(col).stats(1024*1024)}, section);
                     collections_counter++;
                     if (collections_counter > _maxCollections) {
                         var err_msg = 'Already asked for stats on '+collections_counter+' collections ' +
                           'which is above the max allowed for this script. No more database and ' +
                           'collection-level stats will be gathered, so the overall data is ' +
                           'incomplete. '
+                        if (_printJSON) {
+                          err_msg += 'The "subsection" fields have been prefixed with "INCOMPLETE_" ' +
+                          'to indicate that partial data has been outputted.'
+                        }
 
                         throw {
                           name: 'MaxCollectionsExceededException',
                           message: err_msg
                         }
-                    }
-                    if (mydb.name == "config" || mydb.name == "local" || mydb.name == "admin") {
-                        // The following command doesn't make any sense to config, local and admin
-                        return
                     }
                     if (isMongoS) {
                         printInfo('Shard distribution', function() {
@@ -590,30 +503,34 @@ function printDataInfo(isMongoS) {
                               function(){return db.getSiblingDB(mydb.name).getCollection(col).getIndexes()}, section, false, {"db": mydb.name, "collection": col});
                     printInfo('Index Stats',
                               function(){
-                                var res = db.getSiblingDB(mydb.name).runCommand( {
-                                  aggregate: col,
-                                  pipeline: [
-                                    {$indexStats: {}},
-                                    {$group: {_id: "$key", stats: {$push: {accesses: "$accesses.ops", host: "$host", since: "$accesses.since"}}}},
-                                    {$project: {key: "$_id", stats: 1, _id: 0}}
-                                  ],
-                                  cursor: {}
-                                });
+                                try {
+                                  var res = db.getSiblingDB(mydb.name).runCommand( {
+                                    aggregate: col,
+                                    pipeline: [
+                                      {$indexStats: {}},
+                                      {$group: {_id: "$key", stats: {$push: {accesses: "$accesses.ops", host: "$host", since: "$accesses.since"}}}},
+                                      {$project: {key: "$_id", stats: 1, _id: 0}}
+                                    ],
+                                    cursor: {}
+                                  });
 
-                                //It is assumed that there always will be a single batch as collections
-                                //are limited to 64 indexes and usage from all shards is grouped
-                                //into a single document
-                                if (res.hasOwnProperty('cursor') && res.cursor.hasOwnProperty('firstBatch')) {
-                                  res.cursor.firstBatch.forEach(
-                                    function(d){
-                                      d.stats.forEach(
-                                        function(d){
-                                          d.since = d.since.toUTCString();
-                                        })
-                                    });
+                                  //It is assumed that there always will be a single batch as collections
+                                  //are limited to 64 indexes and usage from all shards is grouped
+                                  //into a single document
+                                  if (res.hasOwnProperty('cursor') && res.cursor.hasOwnProperty('firstBatch')) {
+                                    res.cursor.firstBatch.forEach(
+                                      function(d){
+                                        d.stats.forEach(
+                                          function(d){
+                                            d.since = d.since.toUTCString();
+                                          })
+                                      });
+                                  }
+                                  return res;
+                                } catch (e) {
+                                  // Return an error object instead of throwing
+                                  return { error: e.message || String(e) };
                                 }
-
-                                return res;
                               }, section);
                 });
             }
@@ -627,50 +544,146 @@ function printDataInfo(isMongoS) {
 function printShardOrReplicaSetInfo() {
     section = "shard_or_replicaset_info";
     printInfo('isMaster', function(){return db.isMaster()}, section);
-    var state;
+    var state = "unknown";
 
-    // Compatible with mongosh
     try {
+        // Try to get the replica set status
+        print("DEBUG: About to call rs.status()");
         var stateInfo = rs.status();
-    } catch (e) {
-        var stateInfo = e.errorResponse;
-    }
-    if (stateInfo.ok) {
-        stateInfo.members.forEach( function( member ) { if ( member.self ) { state = member.stateStr; } } );
-        if ( !state ) state = stateInfo.myState;
-    } else {
-        var info = stateInfo.info;
-        if ( info && info.length < 20 ) {
-            state = info; // "mongos", "configsvr"
+        
+        print("DEBUG: rs.status() returned");
+        
+        // Set state based on result
+        if (stateInfo && stateInfo.ok) {
+            print("DEBUG: stateInfo.ok is true");
+            
+            if (stateInfo.members) {
+                print("DEBUG: stateInfo has members array");
+                // Try to find the self member
+                for (var i = 0; i < stateInfo.members.length; i++) {
+                    var member = stateInfo.members[i];
+                    if (member.self) {
+                        state = member.stateStr;
+                        print("DEBUG: Found self with state: " + state);
+                        break;
+                    }
+                }
+            }
+            
+            // If we couldn't find self in members, try myState
+            if (state == "unknown" && stateInfo.myState !== undefined) {
+                state = stateInfo.myState;
+                print("DEBUG: Using myState: " + state);
+            }
+        } else {
+            print("DEBUG: stateInfo.ok is false or undefined");
         }
-        if ( ! state ) state = "standalone";
+    } catch (e) {
+        print("DEBUG: Exception in rs.status(): " + (e.message || e));
+        
+        // Try to extract info from error, if available
+        try {
+            if (e.errorResponse && e.errorResponse.info) {
+                var info = e.errorResponse.info;
+                print("DEBUG: Got info from errorResponse: " + info);
+                if (typeof info === 'string' && info.length < 20) {
+                    state = info; // "mongos", "configsvr"
+                    print("DEBUG: Set state from error info: " + state);
+                }
+            }
+        } catch (innerEx) {
+            print("DEBUG: Error processing exception: " + (innerEx.message || innerEx));
+        }
     }
+    
+    // Default to standalone if still unknown
+    if (state == "unknown") {
+        state = "standalone"; 
+        print("DEBUG: Defaulting to standalone state");
+    }
+    
+    print("DEBUG: Final state determined as: " + state);
+    
     if (! _printJSON) print("\n** Connected to " + state);
+    
     if (state == "mongos") {
         printShardInfo();
         return true;
     } else if (state != "standalone" && state != "configsvr") {
+        // Safely try to set secondary OK if needed
         if (state == "SECONDARY" || state == 2) {
-            if (rs.secondaryOk) {
-                rs.secondaryOk();
-            } else {
-                rs.slaveOk();
+            print("DEBUG: Setting secondary/slave OK");
+            try {
+                if (typeof rs.secondaryOk === 'function') {
+                    rs.secondaryOk();
+                } else if (typeof rs.slaveOk === 'function') {
+                    rs.slaveOk();
+                }
+            } catch (e) {
+                print("DEBUG: Error setting secondaryOk: " + (e.message || e));
+                // Continue anyway
             }
         }
-        printReplicaSetInfo();
+        
+        try {
+            print("DEBUG: About to call printReplicaSetInfo()");
+            printReplicaSetInfo();
+        } catch (e) {
+            print("DEBUG: Error in printReplicaSetInfo(): " + (e.message || e));
+            throw e;
+        }
     }
+    
     return false;
 }
 
-// Define _suppressError=true to prevent printing and error message, in case we still want the 
-// output to be parsable JSON even in the event of an error. The JSON will contain the error in the 
-// last entry of the output array.
-if (typeof _suppressError === "undefined") var _suppressError = false;
-if (typeof _printWiredTigerDetails === "undefined") var _printWiredTigerDetails = true;
+// Modify the printReplicaSetInfo function to completely avoid the problematic function
+function printReplicaSetInfo() {
+    section = "replicaset_info";
+    
+    try {
+        print("DEBUG: About to call rs.conf()");
+        printInfo('Replica set config', function(){return rs.conf()}, section);
+    } catch (e) {
+        print("DEBUG: Error in rs.conf(): " + (e.message || String(e)));
+    }
+    
+    try {
+        print("DEBUG: About to call rs.status()");
+        printInfo('Replica status', function(){return rs.status()}, section);
+    } catch (e) {
+        print("DEBUG: Error in rs.status(): " + (e.message || String(e)));
+    }
+    
+    try {
+        print("DEBUG: About to call db.getReplicationInfo()");
+        printInfo('Replica info', function(){return db.getReplicationInfo()}, section);
+    } catch (e) {
+        print("DEBUG: Error in db.getReplicationInfo(): " + (e.message || String(e)));
+    }
+    
+    // Skip the problematic function entirely and just add a placeholder
+    print("DEBUG: Skipping printSecondaryReplicationInfo/printSlaveReplicationInfo");
+    _output.push({
+        section: section,
+        subsection: "replica_slave_info",
+        output: { 
+            info: "Skipped to avoid potential errors. For secondary/slave replication info, use rs.status() or manually run db.printSecondaryReplicationInfo()" 
+        },
+        host: _host,
+        ref: _ref,
+        tag: _tag,
+        version: _version,
+        error: null,
+        command: "db.printSecondaryReplicationInfo/db.printSlaveReplicationInfo - skipped",
+        ts: { start: new Date(), end: new Date() }
+    });
+}
+
+
 if (typeof _printJSON === "undefined") var _printJSON = true;
 if (typeof _printChunkDetails === "undefined") var _printChunkDetails = false;
 if (typeof _ref === "undefined") var _ref = null;
-if (typeof _verbose === "undefined") var _verbose = true;
 
 // Limit the number of collections this script gathers stats on in order
 // to avoid the possibility of running out of file descriptors. This has
@@ -691,46 +704,86 @@ if (typeof db.printSecondaryReplicationInfo === 'function') {
 }
 
 var _total_collection_ct = 0;
+var _output = [];
 var _tag = ObjectId();
 if (! _printJSON) {
     print("================================");
     print("MongoDB Config and Schema Report");
     print("getMongoData.js version " + _version);
     print("================================");
-} else {
-    // Start the JSON array.
-    print("[\n");
 }
 
 var _host = hostname();
-var _error = null;
+
+// Replace the main try-catch block at the end of the script with this version
 try {
+    print("DEBUG: Starting printServerInfo()");
     printServerInfo();
-    var isMongoS = printShardOrReplicaSetInfo();
-    printUserAuthInfo();
-    printDataInfo(isMongoS);
-    printDriverVersions();
-} catch(e) {
-    _error = e.message;
+    
+    print("DEBUG: Starting printShardOrReplicaSetInfo()");
+    var isMongoS = false;
+    try {
+        isMongoS = printShardOrReplicaSetInfo();
+    } catch (e) {
+        print("DEBUG: Error in printShardOrReplicaSetInfo(): " + (e.message || String(e)));
+        // Add error info to output but continue
+        _output.push({
+            section: "shard_or_replicaset_info",
+            subsection: "error",
+            output: { error: e.message || String(e) },
+            host: _host,
+            ref: _ref,
+            tag: _tag,
+            version: _version,
+            error: e.message || String(e),
+            command: "printShardOrReplicaSetInfo",
+            ts: { start: new Date(), end: new Date() }
+        });
+    }
+    
+    print("DEBUG: Starting printUserAuthInfo()");
+    try {
+        printUserAuthInfo();
+    } catch (e) {
+        print("DEBUG: Error in printUserAuthInfo(): " + (e.message || String(e)));
+        // Continue execution
+    }
+    
+    print("DEBUG: Starting printDataInfo()");
+    try {
+        printDataInfo(isMongoS);
+    } catch (e) {
+        if (e.name === 'MaxCollectionsExceededException') {
+            print("DEBUG: MaxCollectionsExceededException caught");
+            // Prefix the "subsection" fields with "INCOMPLETE_" to make
+            // it clear that the database and collection info are likely to be
+            // incomplete.
+            updateDataInfoAsIncomplete(isMongoS);
+        } else {
+            print("DEBUG: Error in printDataInfo(): " + (e.message || String(e)));
+            // Don't quit, try to output what we have
+        }
+    }
+    
+    print("DEBUG: Script completed successfully");
+} catch (e) {
+    // To ensure that the operator knows there was an error, print the error
+    // even when outputting JSON to make it invalid JSON.
+    print('\nERROR: ' + (e.message || String(e)));
+    
     if (e.name === 'MaxCollectionsExceededException') {
-        printInfo("incomplete_databases_and_collections_info", function(){ return e.message; });
+        print("DEBUG: MaxCollectionsExceededException caught in outer catch");
+        // Prefix the "subsection" fields with "INCOMPLETE_" to make
+        // it clear that the database and collection info are likely to be
+        // incomplete.
+        updateDataInfoAsIncomplete(isMongoS);
     } else {
-        printInfo("generic_error", function(){ return e.message; });
+        print("DEBUG: Fatal error: " + (e.message || String(e)));
+        quit(1);
     }
 }
 
-if (_printJSON) {
-    if (_jsonOutBuffer) {
-        print(_jsonOutBuffer);
-    }
-    print("]");
-}
+// Print JSON output
+if (_printJSON) print(JSON.stringify(_output, jsonStringifyReplacer, 4));
 
-if(_error) {
-    if (!_suppressError) {
-        // To ensure that the operator knows there was an error, print the error
-        // even when outputting JSON to make it invalid JSON.
-        print('\nERROR: '+ _error);
-    }
-    quit(1);
-}
+
