@@ -113,106 +113,153 @@ function jsonStringifyReplacer(k, v){
     return v;
 }
 
-// Copied from Mongo Shell
 function printShardInfo(){
     section = "shard_info";
-    var configDB = db.getSiblingDB("config");
+    
+    try {
+        print("DEBUG: Entering printShardInfo");
+        
+        // Reset any read preference to primary before accessing config database
+        try {
+            if (typeof db.getMongo().setReadPref === 'function') {
+                print("DEBUG: Setting read preference to primary");
+                db.getMongo().setReadPref("primary");
+            } else if (typeof db.getMongo().setReadPreference === 'function') {
+                print("DEBUG: Setting read preference to primary (alternative method)");
+                db.getMongo().setReadPreference("primary");
+            } else {
+                print("DEBUG: No method to set read preference found");
+            }
+        } catch (e) {
+            print("DEBUG: Error setting read preference: " + (e.message || String(e)));
+        }
+        
+        var configDB = db.getSiblingDB("config");
+        
+        // Also try to set read preference directly on configDB
+        try {
+            if (typeof configDB.getMongo().setReadPref === 'function') {
+                print("DEBUG: Setting configDB read preference to primary");
+                configDB.getMongo().setReadPref("primary");
+            } else if (typeof configDB.getMongo().setReadPreference === 'function') {
+                print("DEBUG: Setting configDB read preference to primary (alternative)");
+                configDB.getMongo().setReadPreference("primary");
+            }
+        } catch (e) {
+            print("DEBUG: Error setting configDB read preference: " + (e.message || String(e)));
+        }
 
-    printInfo("Sharding version", function(){
-        return configDB.getCollection('version').findOne();
-    }, section);
+        printInfo("Sharding version", function(){
+            return configDB.getCollection('version').findOne();
+        }, section);
 
-    printInfo("Sharding settings", function(){
-        return configDB.settings.find().sort({ _id : 1 }).toArray();
-    }, section);
+        printInfo("Sharding settings", function(){
+            return configDB.settings.find().sort({ _id : 1 }).toArray();
+        }, section);
 
-    printInfo("Routers", function(){
-        return configDB.mongos.find().sort({ _id : 1 }).toArray();
-    }, section);
+        printInfo("Routers", function(){
+            return configDB.mongos.find().sort({ _id : 1 }).toArray();
+        }, section);
 
-    printInfo("Shards", function(){
-        return configDB.shards.find().sort({ _id : 1 }).toArray();
-    }, section);
+        printInfo("Shards", function(){
+            return configDB.shards.find().sort({ _id : 1 }).toArray();
+        }, section);
 
-    printInfo("Sharded databases", function(){
-        var ret = [];
-        configDB.databases.find().sort( { name : 1 } ).forEach(
-            function(db) {
-                doc = {};
-                for (k in db) {
-                    if (db.hasOwnProperty(k)) doc[k] = db[k];
-                }
-                if (db.partitioned) {
-                    doc['collections'] = [];
-                    configDB.collections.find( { _id : new RegExp( "^" +
-                        RegExp.escape(db._id) + "\\." ) } ).
-                        sort( { _id : 1 } ).forEach( function( coll ) {
-                            if ( coll.dropped !== true ){
-                                collDoc = {};
-                                collDoc['_id'] = coll._id;
-                                collDoc['key'] = coll.key;
-                                collDoc['unique'] = coll.unique;
+        printInfo("Sharded databases", function(){
+            var ret = [];
+            configDB.databases.find().sort( { name : 1 } ).forEach(
+                function(db) {
+                    doc = {};
+                    for (k in db) {
+                        if (db.hasOwnProperty(k)) doc[k] = db[k];
+                    }
+                    if (db.partitioned) {
+                        doc['collections'] = [];
+                        configDB.collections.find( { _id : new RegExp( "^" +
+                            RegExp.escape(db._id) + "\\." ) } ).
+                            sort( { _id : 1 } ).forEach( function( coll ) {
+                                if ( coll.dropped !== true ){
+                                    collDoc = {};
+                                    collDoc['_id'] = coll._id;
+                                    collDoc['key'] = coll.key;
+                                    collDoc['unique'] = coll.unique;
 
-                                var res = configDB.chunks.aggregate(
-                                    { "$match": { ns: coll._id } },
-                                    { "$group": { _id: "$shard", nChunks: { "$sum": 1 } } }
-                                );
-                                // MongoDB 2.6 and above returns a cursor instead of a document
-                                res = (res.result ? res.result : res.toArray());
+                                    var res = configDB.chunks.aggregate(
+                                        { "$match": { ns: coll._id } },
+                                        { "$group": { _id: "$shard", nChunks: { "$sum": 1 } } }
+                                    );
+                                    // MongoDB 2.6 and above returns a cursor instead of a document
+                                    res = (res.result ? res.result : res.toArray());
 
-                                collDoc['distribution'] = [];
-                                res.forEach( function(z) {
-                                    chunkDistDoc = {'shard': z._id, 'nChunks': z.nChunks};
-                                    collDoc['distribution'].push(chunkDistDoc);
-                                } );
+                                    collDoc['distribution'] = [];
+                                    res.forEach( function(z) {
+                                        chunkDistDoc = {'shard': z._id, 'nChunks': z.nChunks};
+                                        collDoc['distribution'].push(chunkDistDoc);
+                                    } );
 
-                                if (_printChunkDetails) {
-                                    collDoc['chunks'] = [];
-                                    configDB.chunks.find( { "ns" : coll._id } ).sort( { min : 1 } ).forEach(
-                                        function(chunk) {
-                                            chunkDoc = {}
-                                            chunkDoc['min'] = chunk.min;
-                                            chunkDoc['max'] = chunk.max;
-                                            chunkDoc['shard'] = chunk.shard;
-                                            chunkDoc['jumbo'] = chunk.jumbo ? true : false;
-                                            collDoc['chunks'].push(chunkDoc);
+                                    if (_printChunkDetails) {
+                                        collDoc['chunks'] = [];
+                                        configDB.chunks.find( { "ns" : coll._id } ).sort( { min : 1 } ).forEach(
+                                            function(chunk) {
+                                                chunkDoc = {}
+                                                chunkDoc['min'] = chunk.min;
+                                                chunkDoc['max'] = chunk.max;
+                                                chunkDoc['shard'] = chunk.shard;
+                                                chunkDoc['jumbo'] = chunk.jumbo ? true : false;
+                                                collDoc['chunks'].push(chunkDoc);
+                                            }
+                                        );
+                                    }
+
+                                    collDoc['tags'] = [];
+                                    configDB.tags.find( { ns : coll._id } ).sort( { min : 1 } ).forEach(
+                                        function(tag) {
+                                            tagDoc = {}
+                                            tagDoc['tag'] = tag.tag;
+                                            tagDoc['min'] = tag.min;
+                                            tagDoc['max'] = tag.max;
+                                            collDoc['tags'].push(tagDoc);
                                         }
                                     );
+                                    doc['collections'].push(collDoc);
                                 }
-
-                                collDoc['tags'] = [];
-                                configDB.tags.find( { ns : coll._id } ).sort( { min : 1 } ).forEach(
-                                    function(tag) {
-                                        tagDoc = {}
-                                        tagDoc['tag'] = tag.tag;
-                                        tagDoc['min'] = tag.min;
-                                        tagDoc['max'] = tag.max;
-                                        collDoc['tags'].push(tagDoc);
-                                    }
-                                );
-                                doc['collections'].push(collDoc);
                             }
-                        }
-                    );
+                        );
+                    }
+                    ret.push(doc);
                 }
-                ret.push(doc);
-            }
-        );
-        return ret;
-    }, section);
+            );
+            return ret;
+        }, section);
 
-    printInfo('Balancer status', function(){return db.adminCommand({balancerStatus: 1})}, section);
+        printInfo('Balancer status', function(){return db.adminCommand({balancerStatus: 1})}, section);
 
-    if (sh.getRecentMigrations) { // Function does not exist in older shell versions (2.6 and below)
-        printInfo('Recent chunk migrations', function(){return sh.getRecentMigrations()}, section);
-    } else {
-        if (! _printJSON) print("\n** Recent chunk migrations: n/a")
-    }
+        if (sh.getRecentMigrations) { // Function does not exist in older shell versions (2.6 and below)
+            printInfo('Recent chunk migrations', function(){return sh.getRecentMigrations()}, section);
+        } else {
+            if (! _printJSON) print("\n** Recent chunk migrations: n/a")
+        }
 
-    if (sh.getRecentFailedRounds) { // Function does not exist in older shell versions (2.6 and below)
-        printInfo('Recent failed balancer rounds', function(){return sh.getRecentFailedRounds()}, section);
-    } else {
-        if (! _printJSON) print("\n** Recent failed balancer rounds: n/a")
+        if (sh.getRecentFailedRounds) { // Function does not exist in older shell versions (2.6 and below)
+            printInfo('Recent failed balancer rounds', function(){return sh.getRecentFailedRounds()}, section);
+        } else {
+            if (! _printJSON) print("\n** Recent failed balancer rounds: n/a")
+        }
+    } catch (e) {
+        print("DEBUG: Error in printShardInfo: " + (e.message || String(e)));
+        // Add basic info even if detailed info fails
+        _output.push({
+            section: section,
+            subsection: "error",
+            output: { error: e.message || String(e) },
+            host: _host,
+            ref: _ref,
+            tag: _tag,
+            version: _version,
+            error: e.message || String(e),
+            command: "printShardInfo",
+            ts: { start: new Date(), end: new Date() }
+        });
     }
 }
 
@@ -715,7 +762,6 @@ if (! _printJSON) {
 
 var _host = hostname();
 
-// Replace the main try-catch block at the end of the script with this version
 try {
     print("DEBUG: Starting printServerInfo()");
     printServerInfo();
@@ -723,9 +769,30 @@ try {
     print("DEBUG: Starting printShardOrReplicaSetInfo()");
     var isMongoS = false;
     try {
+        // Set read preference to primary before determining cluster type
+        if (typeof db.getMongo().setReadPref === 'function') {
+            print("DEBUG: Setting initial read preference to primary");
+            db.getMongo().setReadPref("primary");
+        } else if (typeof db.getMongo().setReadPreference === 'function') {
+            print("DEBUG: Setting initial read preference to primary (alt)");
+            db.getMongo().setReadPreference("primary");
+        }
+        
         isMongoS = printShardOrReplicaSetInfo();
     } catch (e) {
         print("DEBUG: Error in printShardOrReplicaSetInfo(): " + (e.message || String(e)));
+        
+        // Try to determine if it's mongos from isMaster
+        try {
+            var isMasterResult = db.isMaster();
+            if (isMasterResult && isMasterResult.msg === "isdbgrid") {
+                print("DEBUG: Detected mongos from isMaster result");
+                isMongoS = true;
+            }
+        } catch (imError) {
+            print("DEBUG: Error checking isMaster: " + (imError.message || String(imError)));
+        }
+        
         // Add error info to output but continue
         _output.push({
             section: "shard_or_replicaset_info",
@@ -785,5 +852,4 @@ try {
 
 // Print JSON output
 if (_printJSON) print(JSON.stringify(_output, jsonStringifyReplacer, 4));
-
 
